@@ -1,6 +1,8 @@
 (function () {
   var ENDPOINT = "/apps/reviews/list";
   var SUBMIT_ENDPOINT = "/apps/reviews/submit";
+  var HELPFUL_ENDPOINT = "/apps/reviews/helpful";
+  var VOTES_KEY = "rvw_helpful_votes";
   var EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   var FILTERS = [
     { value: "all", label: "All" },
@@ -16,6 +18,9 @@
     { value: "helpful", label: "Most helpful" }
   ];
   var AVATAR_COLORS = ["#e6e3f7", "#dcebe4", "#fbe4d6", "#dde6f5", "#f3e1e6", "#e8ebd2"];
+  var THUMB_ICON =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
 
   // User-er likha text-e HTML thakle seta nirapode dekhanor jonno
   function esc(value) {
@@ -50,6 +55,27 @@
 
   function formatDate(iso) {
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  // Ei browser-e kon review-te Helpful dewa hoyeche, localStorage-e rakha hoy
+  function getVotes() {
+    try {
+      return JSON.parse(localStorage.getItem(VOTES_KEY) || "[]");
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function saveVote(id) {
+    try {
+      var votes = getVotes();
+      if (votes.indexOf(id) === -1) {
+        votes.push(id);
+        localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+      }
+    } catch (error) {
+      // localStorage bondho thakle kichu korar nai
+    }
   }
 
   function init(root) {
@@ -178,7 +204,7 @@
       }
     }
 
-    function reviewHtml(review) {
+    function reviewHtml(review, votes) {
       var photos = review.photos.length
         ? '<div class="rvw-review-photos">' + review.photos.map(function (url) {
             return '<img src="' + esc(url) + '" alt="Customer photo" loading="lazy">';
@@ -188,6 +214,7 @@
         ? '<div class="rvw-reply"><div class="rvw-reply-label">Reply from ' + esc(shopName) + "</div>" + esc(review.reply) + "</div>"
         : "";
       var variant = review.variantInfo ? '<div class="rvw-variant">' + esc(review.variantInfo) + "</div>" : "";
+      var voted = votes.indexOf(review.id) !== -1;
 
       return '<article class="rvw-review">' +
         '<div class="rvw-review-top">' +
@@ -200,7 +227,11 @@
         '<h3 class="rvw-review-title">' + esc(review.title) + "</h3>" +
         '<p class="rvw-review-body">' + esc(review.body) + "</p>" +
         photos + variant + reply +
-        '<div class="rvw-helpful">Helpful (' + review.helpfulCount + ")</div>" +
+        '<div class="rvw-helpful"><span>Was this helpful?</span>' +
+          '<button type="button" class="rvw-helpful-btn' + (voted ? " voted" : "") + '" data-helpful="' + esc(review.id) + '"' + (voted ? " disabled" : "") + ">" +
+            THUMB_ICON + '<span data-role="helpful-count">Helpful (' + review.helpfulCount + ")</span>" +
+          "</button>" +
+        "</div>" +
       "</article>";
     }
 
@@ -234,7 +265,10 @@
             renderSummary(data);
           }
 
-          var html = data.reviews.map(reviewHtml).join("");
+          var votes = getVotes();
+          var html = data.reviews.map(function (review) {
+            return reviewHtml(review, votes);
+          }).join("");
           if (!append) {
             el.list.innerHTML = html || '<div class="rvw-message">No reviews match your filters.</div>';
           } else {
@@ -248,6 +282,34 @@
         .then(function () {
           state.loading = false;
           el.more.disabled = false;
+        });
+    }
+
+    // ---- Helpful button ----
+    function sendHelpful(button) {
+      if (button.disabled) return;
+      var reviewId = button.getAttribute("data-helpful");
+      button.disabled = true;
+
+      fetch(HELPFUL_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ review_id: reviewId }).toString()
+      })
+        .then(function (response) {
+          return response.json().catch(function () { return { ok: false }; });
+        })
+        .then(function (result) {
+          if (result.ok) {
+            saveVote(reviewId);
+            button.classList.add("voted");
+            button.querySelector('[data-role="helpful-count"]').textContent = "Helpful (" + result.helpfulCount + ")";
+          } else {
+            button.disabled = false;
+          }
+        })
+        .catch(function () {
+          button.disabled = false;
         });
     }
 
@@ -339,6 +401,11 @@
     root.addEventListener("click", function (event) {
       if (event.target === el.dialog) {
         el.dialog.close();
+        return;
+      }
+      var helpful = event.target.closest("[data-helpful]");
+      if (helpful) {
+        sendHelpful(helpful);
         return;
       }
       if (event.target.closest('[data-role="write"]')) {

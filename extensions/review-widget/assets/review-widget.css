@@ -51,7 +51,12 @@
 .rvw-variant { font-size: 12px; color: #6b6b66; }
 .rvw-reply { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: #f7f6f2; font-size: 13px; color: #4a4a46; }
 .rvw-reply-label { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #6b6b66; margin-bottom: 4px; }
-.rvw-helpful { margin-top: 14px; padding-top: 14px; border-top: 1px solid #eeeeea; font-size: 13px; color: #6b6b66; }
+
+.rvw-helpful { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eeeeea; font-size: 13px; color: #6b6b66; }
+.rvw-helpful-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #deded8; background: #ffffff; color: #1a1a1a; padding: 7px 14px; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.rvw-helpful-btn:hover:not(:disabled) { border-color: var(--rvw-accent); color: var(--rvw-accent); }
+.rvw-helpful-btn:disabled { cursor: default; }
+.rvw-helpful-btn.voted { background: #f1f2f3; border-color: #e3e3de; color: #6b6b66; }
 
 .rvw-more-wrap { text-align: center; margin-top: 28px; }
 .rvw-more { border: 1px solid #15151a; background: #ffffff; color: #15151a; padding: 12px 28px; border-radius: 10px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }

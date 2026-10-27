@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useFetcher, useLoaderData, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
 const PAGE_SIZE = 50;
+const MAX_REPLY_LENGTH = 1000;
 const VALID_STATUSES = ["pending", "flagged", "approved", "rejected"];
 const FILTERS = [
   { value: "all", label: "All" },
@@ -73,7 +75,7 @@ export const loader = async ({ request }) => {
   return { statusFilter, reviews, counts };
 };
 
-// Approve / Reject button click korle ei function chole
+// Approve / Reject / Reply button click korle ei function chole
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
 
@@ -81,10 +83,28 @@ export const action = async ({ request }) => {
   const intent = formData.get("intent");
   const id = formData.get("id");
 
+  if (typeof id !== "string" || !id) {
+    return { ok: false };
+  }
+
+  // Reply save kora. Faka reply dile purano reply muche jay
+  if (intent === "reply") {
+    const reply = String(formData.get("reply") ?? "")
+      .trim()
+      .slice(0, MAX_REPLY_LENGTH);
+
+    await prisma.review.updateMany({
+      where: { id, shop: session.shop },
+      data: { reply: reply || null, repliedAt: reply ? new Date() : null },
+    });
+
+    return { ok: true };
+  }
+
   const nextStatus =
     intent === "approve" ? "approved" : intent === "reject" ? "rejected" : null;
 
-  if (!nextStatus || typeof id !== "string" || !id) {
+  if (!nextStatus) {
     return { ok: false };
   }
 
@@ -114,8 +134,24 @@ function ReviewCard({ review }) {
   const busy = fetcher.state !== "idle";
   const badge = STATUS_BADGES[review.status] || STATUS_BADGES.rejected;
 
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
   const send = (intent) => {
     fetcher.submit({ intent, id: review.id }, { method: "post" });
+  };
+
+  const openReply = () => {
+    setDraft(review.reply || "");
+    setEditing(true);
+  };
+
+  const saveReply = () => {
+    fetcher.submit(
+      { intent: "reply", id: review.id, reply: draft },
+      { method: "post" },
+    );
+    setEditing(false);
   };
 
   return (
@@ -155,35 +191,82 @@ function ReviewCard({ review }) {
         {[review.productTitle, review.variantInfo].filter(Boolean).join(" · ")}
       </div>
 
-      {review.reply && (
+      {review.reply && !editing && (
         <div className="review-reply">
           <div className="review-reply-label">Your reply</div>
           <div>{review.reply}</div>
         </div>
       )}
 
-      <div className="review-actions">
-        {review.status !== "approved" && (
+      {editing && (
+        <div className="reply-editor">
+          <label className="reply-label" htmlFor={`reply-${review.id}`}>
+            Your reply
+          </label>
+          <textarea
+            id={`reply-${review.id}`}
+            className="reply-textarea"
+            value={draft}
+            maxLength={MAX_REPLY_LENGTH}
+            placeholder="Write a public reply to this customer"
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <div className="reply-hint">
+            {draft.length}/{MAX_REPLY_LENGTH} · Customers see this reply under
+            their review. Leave it empty and save to remove the reply.
+          </div>
+          <div className="reply-actions">
+            <button
+              type="button"
+              className="action-button approve"
+              disabled={busy}
+              onClick={saveReply}
+            >
+              Save reply
+            </button>
+            <button
+              type="button"
+              className="action-button"
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!editing && (
+        <div className="review-actions">
+          {review.status !== "approved" && (
+            <button
+              type="button"
+              className="action-button approve"
+              disabled={busy}
+              onClick={() => send("approve")}
+            >
+              Approve
+            </button>
+          )}
+          {review.status !== "rejected" && (
+            <button
+              type="button"
+              className="action-button reject"
+              disabled={busy}
+              onClick={() => send("reject")}
+            >
+              Reject
+            </button>
+          )}
           <button
             type="button"
-            className="action-button approve"
+            className="action-button"
             disabled={busy}
-            onClick={() => send("approve")}
+            onClick={openReply}
           >
-            Approve
+            {review.reply ? "Edit reply" : "Reply"}
           </button>
-        )}
-        {review.status !== "rejected" && (
-          <button
-            type="button"
-            className="action-button reject"
-            disabled={busy}
-            onClick={() => send("reject")}
-          >
-            Reject
-          </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -225,6 +308,12 @@ export default function ReviewsPage() {
         .review-meta { font-size: 12px; color: #6d7175; }
         .review-reply { margin-top: 12px; background: #f7f7f5; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #303030; }
         .review-reply-label { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #6d7175; margin-bottom: 2px; }
+        .reply-editor { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e1e3e5; }
+        .reply-label { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #6d7175; margin-bottom: 6px; }
+        .reply-textarea { display: block; width: 100%; min-height: 90px; resize: vertical; border: 1px solid #c9cccf; border-radius: 8px; padding: 10px 12px; font: inherit; font-size: 14px; color: #1a1a1a; background: #ffffff; box-sizing: border-box; }
+        .reply-textarea:focus { outline: 2px solid #2563eb; outline-offset: 0; border-color: #2563eb; }
+        .reply-hint { font-size: 12px; color: #6d7175; margin-top: 6px; }
+        .reply-actions { display: flex; gap: 8px; margin-top: 12px; }
         .review-actions { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e1e3e5; }
         .action-button { border: 1px solid #e1e3e5; background: #ffffff; padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
         .action-button:disabled { opacity: 0.5; cursor: default; }
