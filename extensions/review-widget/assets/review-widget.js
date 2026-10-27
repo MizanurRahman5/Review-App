@@ -1,5 +1,7 @@
 (function () {
   var ENDPOINT = "/apps/reviews/list";
+  var SUBMIT_ENDPOINT = "/apps/reviews/submit";
+  var EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   var FILTERS = [
     { value: "all", label: "All" },
     { value: "photos", label: "With photos" },
@@ -55,9 +57,15 @@
     root.setAttribute("data-ready", "1");
 
     var productId = root.getAttribute("data-product-id");
+    var productTitle = root.getAttribute("data-product-title") || "";
     var shopName = root.getAttribute("data-shop-name");
     var eyebrow = root.getAttribute("data-eyebrow");
-    var state = { filter: "all", sort: "recent", q: "", page: 1, loading: false, firstLoad: true };
+    // Merchant theme editor-e je accent rong dise, seta ekhane pai
+    var accent = (getComputedStyle(root).getPropertyValue("--rvw-accent") || "").trim() || "#4f52e0";
+    var state = {
+      filter: "all", sort: "recent", q: "", page: 1,
+      loading: false, firstLoad: true, rating: 0, submitting: false
+    };
     var searchTimer = null;
 
     var filtersHtml = FILTERS.map(function (item) {
@@ -67,10 +75,41 @@
     var sortHtml = SORTS.map(function (item) {
       return '<option value="' + item.value + '">' + item.label + "</option>";
     }).join("");
+    var rateHtml = [1, 2, 3, 4, 5].map(function (n) {
+      return '<button type="button" class="rvw-rate-star" data-rate="' + n + '" aria-label="' + n + ' star' + (n === 1 ? "" : "s") + '">★</button>';
+    }).join("");
+
+    var dialogHtml =
+      '<dialog class="rvw-dialog" data-role="dialog">' +
+        '<form class="rvw-form" data-role="form" novalidate>' +
+          '<div class="rvw-form-head"><h3 class="rvw-form-title">Write a review</h3>' +
+            '<button type="button" class="rvw-close" data-role="close" aria-label="Close">×</button></div>' +
+          '<div class="rvw-field"><label>Your rating</label><div class="rvw-rate" data-role="rate">' + rateHtml + "</div></div>" +
+          '<div class="rvw-field"><label for="rvw-name-' + root.id + '">Your name</label>' +
+            '<input class="rvw-input" id="rvw-name-' + root.id + '" name="name" type="text" maxlength="60" autocomplete="name"></div>' +
+          '<div class="rvw-field"><label for="rvw-email-' + root.id + '">Email (not shown publicly)</label>' +
+            '<input class="rvw-input" id="rvw-email-' + root.id + '" name="email" type="email" maxlength="120" autocomplete="email"></div>' +
+          '<div class="rvw-field"><label for="rvw-title-' + root.id + '">Review title</label>' +
+            '<input class="rvw-input" id="rvw-title-' + root.id + '" name="title" type="text" maxlength="100"></div>' +
+          '<div class="rvw-field"><label for="rvw-body-' + root.id + '">Your review</label>' +
+            '<textarea class="rvw-textarea" id="rvw-body-' + root.id + '" name="body" maxlength="2000"></textarea></div>' +
+          '<div class="rvw-hp" aria-hidden="true"><label>Website<input name="website" type="text" tabindex="-1" autocomplete="off"></label></div>' +
+          '<div class="rvw-form-error" data-role="form-error" hidden></div>' +
+          '<button type="submit" class="rvw-submit" data-role="submit">Submit review</button>' +
+        "</form>" +
+        '<div class="rvw-thanks" data-role="thanks" hidden>' +
+          "<h3>Thank you!</h3>" +
+          "<p>Your review was submitted. It will appear here after our team approves it.</p>" +
+          '<button type="button" class="rvw-submit" data-role="close">Close</button>' +
+        "</div>" +
+      "</dialog>";
 
     root.innerHTML =
-      '<div class="rvw-eyebrow">' + esc(eyebrow) + "</div>" +
-      '<h2 class="rvw-title" data-role="title">Customer reviews</h2>' +
+      '<div class="rvw-head">' +
+        '<div><div class="rvw-eyebrow">' + esc(eyebrow) + "</div>" +
+        '<h2 class="rvw-title" data-role="title">Customer reviews</h2></div>' +
+        '<button type="button" class="rvw-write" data-role="write">Write a review</button>' +
+      "</div>" +
       '<div class="rvw-summary" data-role="summary" hidden></div>' +
       '<div data-role="photos" hidden></div>' +
       '<div class="rvw-controls" data-role="controls" hidden>' +
@@ -83,7 +122,8 @@
       '<div class="rvw-list" data-role="list"><div class="rvw-message">Loading reviews...</div></div>' +
       '<div class="rvw-more-wrap" data-role="more-wrap" hidden>' +
         '<button type="button" class="rvw-more" data-role="more">Load more reviews</button>' +
-      "</div>";
+      "</div>" +
+      dialogHtml;
 
     var el = {
       title: root.querySelector('[data-role="title"]'),
@@ -92,18 +132,26 @@
       controls: root.querySelector('[data-role="controls"]'),
       list: root.querySelector('[data-role="list"]'),
       moreWrap: root.querySelector('[data-role="more-wrap"]'),
-      more: root.querySelector('[data-role="more"]')
+      more: root.querySelector('[data-role="more"]'),
+      dialog: root.querySelector('[data-role="dialog"]'),
+      form: root.querySelector('[data-role="form"]'),
+      thanks: root.querySelector('[data-role="thanks"]'),
+      formError: root.querySelector('[data-role="form-error"]'),
+      submit: root.querySelector('[data-role="submit"]')
     };
 
     function renderSummary(data) {
       var summary = data.summary;
       el.title.textContent = "Loved by " + summary.total.toLocaleString("en-US") + " customer" + (summary.total === 1 ? "" : "s");
 
+      // Bar-er style shorashori element-e deya hoyeche, jate theme-er CSS eta bodlate na pare
       var rows = [5, 4, 3, 2, 1].map(function (star) {
         var count = summary.counts[star] || 0;
-        var percent = summary.total ? (count / summary.total) * 100 : 0;
+        var percent = summary.total ? Math.round((count / summary.total) * 1000) / 10 : 0;
         return '<div class="rvw-dist-row"><span>' + star + ' ★</span>' +
-          '<div class="rvw-track"><div class="rvw-fill" style="width:' + percent + '%"></div></div>' +
+          '<div class="rvw-track" style="position:relative;height:8px;border-radius:999px;background:#eeeeea;overflow:hidden;">' +
+            '<div class="rvw-fill" style="position:absolute;top:0;left:0;bottom:0;display:block;width:' + percent + '%;background:' + accent + ';border-radius:999px;"></div>' +
+          "</div>" +
           '<span class="rvw-dist-count">' + count + "</span></div>";
       }).join("");
 
@@ -179,7 +227,7 @@
             state.firstLoad = false;
             if (data.summary.total === 0) {
               el.title.textContent = "Customer reviews";
-              el.list.innerHTML = '<div class="rvw-message">No reviews yet.</div>';
+              el.list.innerHTML = '<div class="rvw-message">No reviews yet. Be the first to write one!</div>';
               el.moreWrap.hidden = true;
               return;
             }
@@ -203,7 +251,109 @@
         });
     }
 
+    // ---- Write a review form ----
+    function setRating(value) {
+      state.rating = value;
+      root.querySelectorAll("[data-rate]").forEach(function (button) {
+        button.classList.toggle("on", Number(button.getAttribute("data-rate")) <= value);
+      });
+    }
+
+    function showFormError(message) {
+      el.formError.textContent = message;
+      el.formError.hidden = false;
+    }
+
+    function openDialog() {
+      el.form.reset();
+      setRating(0);
+      el.formError.hidden = true;
+      el.form.hidden = false;
+      el.thanks.hidden = true;
+      el.dialog.showModal();
+    }
+
+    function submitReview() {
+      if (state.submitting) return;
+
+      var data = new FormData(el.form);
+      var name = String(data.get("name") || "").trim();
+      var email = String(data.get("email") || "").trim();
+      var title = String(data.get("title") || "").trim();
+      var body = String(data.get("body") || "").trim();
+
+      var error = "";
+      if (!state.rating) error = "Please choose a star rating.";
+      else if (!name) error = "Please enter your name.";
+      else if (!EMAIL_PATTERN.test(email)) error = "Please enter a valid email address.";
+      else if (!title) error = "Please add a review title.";
+      else if (body.length < 10) error = "Please write at least 10 characters in your review.";
+
+      if (error) {
+        showFormError(error);
+        return;
+      }
+
+      el.formError.hidden = true;
+      state.submitting = true;
+      el.submit.disabled = true;
+      el.submit.textContent = "Submitting...";
+
+      var payload = new URLSearchParams({
+        product_id: productId,
+        product_title: productTitle,
+        rating: String(state.rating),
+        name: name,
+        email: email,
+        title: title,
+        body: body,
+        website: String(data.get("website") || "")
+      });
+
+      fetch(SUBMIT_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: payload.toString()
+      })
+        .then(function (response) {
+          return response.json().catch(function () { return { ok: false }; });
+        })
+        .then(function (result) {
+          if (result.ok) {
+            el.form.hidden = true;
+            el.thanks.hidden = false;
+          } else {
+            showFormError(result.error || "Something went wrong. Please try again.");
+          }
+        })
+        .catch(function () {
+          showFormError("Something went wrong. Please try again.");
+        })
+        .then(function () {
+          state.submitting = false;
+          el.submit.disabled = false;
+          el.submit.textContent = "Submit review";
+        });
+    }
+
     root.addEventListener("click", function (event) {
+      if (event.target === el.dialog) {
+        el.dialog.close();
+        return;
+      }
+      if (event.target.closest('[data-role="write"]')) {
+        openDialog();
+        return;
+      }
+      if (event.target.closest('[data-role="close"]')) {
+        el.dialog.close();
+        return;
+      }
+      var star = event.target.closest("[data-rate]");
+      if (star) {
+        setRating(Number(star.getAttribute("data-rate")));
+        return;
+      }
       var pill = event.target.closest("[data-filter]");
       if (pill) {
         state.filter = pill.getAttribute("data-filter");
@@ -218,6 +368,11 @@
         state.page += 1;
         load(true);
       }
+    });
+
+    el.form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitReview();
     });
 
     root.addEventListener("input", function (event) {

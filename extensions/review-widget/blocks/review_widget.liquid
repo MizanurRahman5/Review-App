@@ -9,6 +9,7 @@
   class="rvw"
   id="rvw-{{ block.id }}"
   data-product-id="{{ rvw_product_id }}"
+  data-product-title="{{ product.title | escape }}"
   data-shop-name="{{ shop.name | escape }}"
   data-eyebrow="{{ block.settings.eyebrow | escape }}"
   style="--rvw-accent: {{ block.settings.accent }};"
